@@ -284,7 +284,7 @@ def run(args: argparse.Namespace) -> dict:
     should_discover = not last or (datetime.now(timezone.utc) - datetime.fromisoformat(last[0])).total_seconds() >= args.discover_hours * 3600
     if should_discover:
         try:
-            count = discover(http, db, args.max_film_pages)
+            count = discover(http, db, getattr(args, 'max_film_pages', 8))
             LOG.info("Found %s official still references", count)
         except Exception as exc:
             LOG.warning("Discovery failed: %s", exc)
