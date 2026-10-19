@@ -35,17 +35,14 @@ jobs:
           mkdir -p ghibli-poc/archive
           python - <<'PY'
           import json, os, subprocess
-          d=json.loads(subprocess.check_output(['gh','api',f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts?name=ghibli-cumulative-archive&per_page=20"]))
-          a=[x for x in d['artifacts'] if not x['expired']]
-          if a:
-              a.sort(key=lambda x:x['created_at'],reverse=True)
-              subprocess.run(['gh','api',f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts/{a[0]['id']}/zip",'-H','Accept: application/vnd.github+json'],check=True,stdout=open('/tmp/ghibli-restore.zip','wb'))
-              print('Restoring cumulative artifact',a[0]['id'])
-          else:
-              subprocess.run(['gh','api',f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts/12165369035/zip'],check=True,stdout=open('/tmp/ghibli-restore.zip','wb'))
-              print('Seeding from verified POC 12165369035')
+          repo=os.environ['GITHUB_REPOSITORY']
+          data=json.loads(subprocess.check_output(['gh','api',f'/repos/{repo}/actions/artifacts?name=ghibli-cumulative-archive&per_page=20']))
+          valid=sorted((x for x in data['artifacts'] if not x['expired']),key=lambda x:x['created_at'],reverse=True)
+          run_id=valid[0]['workflow_run']['id'] if valid else 39206952702
+          name='ghibli-cumulative-archive' if valid else 'ghibli-colour-poc'
+          print('Restoring',name,'from run',run_id)
+          subprocess.run(['gh','run','download',str(run_id),'-R',repo,'-n',name,'-D','ghibli-poc/archive'],check=True)
           PY
-          unzip -oq /tmp/ghibli-restore.zip -d ghibli-poc/archive
           python - <<'PY'
           from pathlib import Path
           import csv, sqlite3
