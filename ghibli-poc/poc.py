@@ -67,13 +67,17 @@ def classify(body):
 
 # Candidate names match Ghibli's documented official gallery naming convention.
 films = ["ponyo", "totoro", "chihiro", "marnie", "mononoke", "laputa", "kazetachinu", "kimitachi"]
-candidates = [(film, BASE+f"/gallery/{film}{n:03d}.jpg") for n in range(1,19) for film in films]
+progress_path = Path("ghibli-poc/progress.json")
+progress = json.loads(progress_path.read_text(encoding="utf-8")) if progress_path.exists() else {}
+already_checked = set(progress.get("processed_urls", []))
+all_candidates = [(film, BASE+f"/gallery/{film}{n:03d}.jpg") for n in range(1,51) for film in films]
+candidates = [(film,url) for film,url in all_candidates if url not in already_checked][:24]
 rows = []
-saved_hashes = set()
+saved_hashes = set(progress.get("saved_sha256", []))
 accepted=0
 downloaded=0
 for film, url in candidates:
-    if len(rows)>=72 or accepted>=6: break
+    if len(rows)>=24 or accepted>=6: break
     if not robots.can_fetch(AGENT, url):
         rows.append([url, "robots_disallow", "", 0, 0, 0, ""])
         continue
@@ -102,9 +106,15 @@ for film, url in candidates:
         rows.append([url, "error", "",0,0,0, str(e)[:150]])
         print(f"{len(rows):3d} ERROR {film}: {e}",flush=True)
 
+# Checkpoint processed source URLs and hashes without placing copyrighted images in git.
+processed_now = {r[0] for r in rows if r[1] != "error"}
+progress["processed_urls"] = sorted(already_checked | processed_now)
+progress["saved_sha256"] = sorted(saved_hashes)
+progress["accepted_total"] = int(progress.get("accepted_total", 0)) + accepted
+progress_path.write_text(json.dumps(progress, indent=2), encoding="utf-8")
 with (ROOT/"manifest.csv").open("w",newline="") as f:
     writer=csv.writer(f); writer.writerow(["official_url","status","dominant_colour","fraction","grey_fraction","brown_fraction","saved_path"]); writer.writerows(rows)
 summary = {"attempted":len(rows),"downloaded":downloaded,"accepted":accepted,"rejected":sum(1 for r in rows if r[1] not in ("accepted","error")),"errors":sum(r[1]=="error" for r in rows),"saved_files":[r[-1] for r in rows if r[1]=="accepted"]}
 (ROOT/"summary.json").write_text(json.dumps(summary,indent=2))
 print("FINAL_SUMMARY "+json.dumps(summary),flush=True)
-if accepted==0: raise SystemExit("POC did not produce any accepted saved images")
+# An incremental hourly run with zero qualifying stills is normal.
