@@ -1,0 +1,94 @@
+name: Ghibli Hourly Colour Archive
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ghibli-colour-archive
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ghibli-colour-poc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -q pillow numpy requests beautifulsoup4
+      - name: Verify tests
+        run: cd ghibli-poc && python -m unittest discover -s tests -v
+      - name: Restore previous cumulative archive, or seed from successful POC
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mkdir -p ghibli-poc/archive
+          python - <<'PY'
+          import json, os, subprocess
+          d=json.loads(subprocess.check_output(['gh','api',f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts?name=ghibli-cumulative-archive&per_page=20"]))
+          a=[x for x in d['artifacts'] if not x['expired']]
+          if a:
+              a.sort(key=lambda x:x['created_at'],reverse=True)
+              subprocess.run(['gh','api',f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts/{a[0]['id']}/zip",'-H','Accept: application/vnd.github+json'],check=True,stdout=open('/tmp/ghibli-restore.zip','wb'))
+              print('Restoring cumulative artifact',a[0]['id'])
+          else:
+              subprocess.run(['gh','api',f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/artifacts/12165369035/zip'],check=True,stdout=open('/tmp/ghibli-restore.zip','wb'))
+              print('Seeding from verified POC 12165369035')
+          PY
+          unzip -oq /tmp/ghibli-restore.zip -d ghibli-poc/archive
+          python - <<'PY'
+          from pathlib import Path
+          import csv, sqlite3
+          p=Path('ghibli-poc/archive')
+          # POC report uses saved_path references, not the later collector schema.
+          old=p/'manifest.csv'
+          if old.exists() and not (p/'index.sqlite3').exists():
+              import sys
+              sys.path.insert(0,'ghibli-poc')
+              from collector import connect,now
+              db=connect(p/'index.sqlite3')
+              with old.open() as f:
+                  for row in csv.DictReader(f):
+                      url=row.get('official_url')
+                      if not url: continue
+                      status='accepted' if row.get('status')=='accepted' else 'rejected'
+                      film=url.rsplit('/',1)[-1].split('0')[0]
+                      saved=row.get('saved_path','')
+                      relative=saved.replace('ghibli-poc/output/','') if saved else None
+                      if relative and not (p/relative).exists(): relative=None
+                      db.execute("INSERT OR IGNORE INTO images(url,film,discovered_at,checked_at,status,reason,colour,majority,saved_path) VALUES (?,?,?,?,?,?,?,?,?)",(url,film,now(),now(),status,row.get('status'),row.get('dominant_colour') if status=='accepted' else None,float(row.get('fraction') or 0),relative))
+              db.commit(); db.execute('PRAGMA wal_checkpoint(TRUNCATE)');db.close()
+              old.rename(p/'poc_manifest.csv')
+          PY
+      - name: Collect newly discovered stills
+        run: python ghibli-poc/collector.py --root ghibli-poc/archive --max-film-pages 5 --max-process 14 --max-new 6 --delay 2.5 --discover-hours 1
+      - name: Verify archived JPGs and DB
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import sqlite3
+          from PIL import Image
+          p=Path('ghibli-poc/archive')
+          db=sqlite3.connect(p/'index.sqlite3')
+          for path, in db.execute("SELECT saved_path FROM images WHERE status='accepted' AND saved_path IS NOT NULL"):
+              q=p/path
+              if not q.is_file(): raise RuntimeError('Missing '+str(q))
+              with Image.open(q) as im: im.verify()
+          print('Accepted image files verified')
+          db.close()
+          PY
+      - name: Upload cumulative private workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghibli-cumulative-archive
+          path: ghibli-poc/archive/
+          retention-days: 90
+          if-no-files-found: error
+          compression-level: 6
