@@ -1,5 +1,8 @@
 name: Ghibli Hourly Colour Archive
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/ghibli-hourly.yml']
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
