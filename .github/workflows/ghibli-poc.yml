@@ -1,10 +1,5 @@
 name: Ghibli colour POC
 on:
-  push:
-    branches: [ghibli-colour-poc]
-    paths:
-      - 'ghibli-poc/**'
-      - '.github/workflows/ghibli-poc.yml'
   workflow_dispatch:
 permissions:
   contents: write
